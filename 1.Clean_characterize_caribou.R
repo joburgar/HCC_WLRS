@@ -297,7 +297,7 @@ write_csv(
 tenures_small <- tenures %>%
   select(
     tenure_location,
-    client_name
+    id
   )
 
 pts_tenure <- st_join(
