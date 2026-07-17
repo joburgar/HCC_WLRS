@@ -14,6 +14,7 @@
 
 #############################################################
 # Caribou Winter Collar Characterization
+# 15 - July - 2026
 # Joanna Burgar (adapted from Bevan Ernst)
 ############################################################
 
@@ -38,6 +39,7 @@
 # Load libraries
 ############################################################
 
+library(readxl)
 library(collar)
 library(sf)
 library(tidyverse)
@@ -64,8 +66,38 @@ key_paths <- list.files(
   recursive = TRUE
 )
 
+# Read collar database
+collar_db <- read_excel(
+  "CRP_Provincial_CaptMort_Database.xlsx"
+) %>%
+  clean_names() %>%
+  filter(species == "Caribou") %>%
+  mutate(
+    collar_id = as.character(collar_id)
+  ) %>%
+  distinct(collar_id)
+
+
+# Extract collar number from key filename
+key_lookup <- tibble(
+  key_path = key_paths,
+  collar_id = str_extract(
+    basename(key_paths),
+    "\\d+"
+  )
+)
+
+# Keep only caribou keys
+caribou_keys <- key_lookup %>%
+  semi_join(
+    collar_db,
+    by = "collar_id"
+  )
+
+caribou_keys # 955
+
 gps <- purrr::map_dfr(
-  key_paths[1:3],
+  caribou_keys$key_path,
   ~fetch_vectronics(
     key_paths = .x,
     start_date = "2019-10-01T00:00:00",
