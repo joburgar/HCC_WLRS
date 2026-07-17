@@ -14,7 +14,7 @@
 
 #############################################################
 # Caribou Winter Collar Characterization
-# Joanna Burgar
+# Joanna Burgar (adapted from Bevan Ernst)
 ############################################################
 
 # Loads and cleans GPS data
@@ -38,6 +38,7 @@
 # Load libraries
 ############################################################
 
+library(collar)
 library(sf)
 library(tidyverse)
 library(adehabitatHR)
@@ -52,12 +53,77 @@ library(janitor)
 output_dir <- "Outputs"
 dir.create(output_dir, showWarnings = FALSE)
 
-############################################################
-# LOAD GPS DATA
-############################################################
+##################################################
+# DOWNLOAD AND PREPARE CARIBOU GPS DATA
+##################################################
 
-gps <- read_csv("Caribou_winter_MCP.csv")
-# dim(gps) # [1] 107250     33
+key_paths <- list.files(
+  "KEY_FILES",
+  full.names = TRUE,
+  pattern = "\\.keyx$",
+  recursive = TRUE
+)
+
+gps <- purrr::map_dfr(
+  key_paths[1:3],
+  ~fetch_vectronics(
+    key_paths = .x,
+    start_date = "2019-10-01T00:00:00",
+    which_date = "acquisition"
+  ),
+  .progress = TRUE
+)
+
+gps %>%
+  count(idcollar, sort = TRUE)
+
+
+##################################################
+# CLEAN
+##################################################
+names(gps)
+gps <- gps %>%
+  filter(
+    !is.na(latitude),
+    !is.na(longitude)
+  ) %>%
+  mutate(
+    datetime =
+      ymd_hms(acquisitiontime, tz = "UTC") -
+      hours(8),
+    COLLAR_ID = as.numeric(idcollar)
+  ) %>%
+  select(
+    COLLAR_ID,
+    datetime,
+    latitude,
+    longitude,
+    dop,
+    idmortalitystatus,
+    activity,
+    temperature,
+    mainvoltage,
+    backupvoltage
+  )
+
+
+names(gps)
+
+##################################################
+# SAVE EXPORTED DATA
+##################################################
+
+saveRDS(gps, "gps_download.rds") # save
+gps <- readRDS("gps_download.rds") # load
+
+message(
+  "Downloaded ",
+  nrow(gps),
+  " fixes from ",
+  n_distinct(gps$COLLAR_ID),
+  " collars."
+)
+
 
 ############################################################
 # LOAD HERDS
@@ -86,15 +152,10 @@ tenures <- bcdc_get_data(
 gps_clean <- gps %>%
   filter(
     !is.na(latitude),
-    !is.na(longitude)
-  ) %>%
-  filter(
+    !is.na(longitude),
+    !is.na(datetime),
     dop <= 8
-  ) %>%
-  mutate(
-    datetime = mdy_hms(Date_Time_)
-  ) %>%
-  filter(!is.na(datetime))
+  )
 
 ############################################################
 # CREATE SF OBJECT
