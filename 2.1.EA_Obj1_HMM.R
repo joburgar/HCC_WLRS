@@ -30,12 +30,10 @@
 ############################################################
 
 library(tidyverse)
-library(lubridate)
 library(bcdata)
 library(janitor)
 library(sf)
 library(moveHMM)
-
 
 ############################################################
 # HMM Feasability Assessment
@@ -158,18 +156,10 @@ ggplot(
 
 quantile(movement$step_length,probs = c(0.1,0.25,0.5,0.75,0.9,0.95),na.rm = TRUE)
 
-movement %>%summarise(collars = n_distinct(collar),locations = n(),steps = sum(!is.na(step_length)))
+movement %>% summarise(collars = n_distinct(collar),locations = n(),steps = sum(!is.na(step_length)))
 summary(movement$dt_hours)
 
-movement %>%
-  mutate(year = lubridate::year(datetim)) %>%
-  group_by(year) %>%
-  summarise(median_dt = median(dt_hours, na.rm = TRUE),mean_dt = mean(dt_hours, na.rm = TRUE),n = n())
-
-movement %>%
-  group_by(collar) %>%
-  summarise(median_dt = median(dt_hours, na.rm = TRUE),n = n()) %>%
-  arrange(median_dt)
+saveRDS(movement, "movement.rds") # save
 
 # For HMM feasibility pilot, will use Hart Ranges data from the full winter (Nov-Apr) for 2023-2026
 # 1. consistent fix rate,
@@ -199,6 +189,12 @@ movement %>%
 # Compare tenure-overlap vs non-overlap animals
 # Fit a 3-state HMM for comparison
 
+###############################################
+# 1. PREPARE DATA
+###############################################
+
+movement <- readRDS("movement.rds") # load
+
 hmm_data <- movement %>%
   filter(year %in% c(2022, 2023, 2024, 2025),
          dt_hours >= 6,
@@ -209,211 +205,51 @@ summary(hmm_data$dt_hours)
 hmm_data %>%
   summarise(collars = n_distinct(collar),steps = n())
 
-# ###############################################
-# # 1. PREPARE DATA
-# ###############################################
-# 
-# collar <- telemetry %>%
-#   st_drop_geometry() %>%
-#   clean_names() %>%
-#   rename(
-#     animal_id = collar_,
-#     datetime = datetim,
-#     overlap = ovrlps_
-#   )
-# 
-###############################################
-# 2. CREATE MOVEMENT METRICS
-###############################################
-
-movement <- collar %>%
-  filter(herd_nm == "Hart Ranges") %>%
-  arrange(animal_id, datetime) %>%
-  group_by(animal_id) %>%
-  
-  mutate(
-    
-    year = year(datetime),
-    
-    dt_hours =
-      as.numeric(
-        difftime(
-          datetime,
-          lag(datetime),
-          units = "hours"
-        )
-      ),
-    
-    dx = x - lag(x),
-    dy = y - lag(y),
-    
-    step_length =
-      sqrt(dx^2 + dy^2),
-    
-    bearing =
-      atan2(dy, dx)
-    
-  ) %>%
-  
-  mutate(
-    turning_angle =
-      bearing - lag(bearing)
-  ) %>%
-  
-  ungroup()
-
-###############################################
-# WRAP TURNING ANGLES
-###############################################
-
-movement <- movement %>%
-  mutate(
-    turning_angle =
-      atan2(
-        sin(turning_angle),
-        cos(turning_angle)
-      )
-  )
-
-###############################################
-# 3. EXAMINE FIX INTERVALS
-###############################################
-
-summary(movement$dt_hours)
-
-movement %>%
-  group_by(year) %>%
-  summarise(
-    median_dt =
-      median(dt_hours,
-             na.rm = TRUE),
-    mean_dt =
-      mean(dt_hours,
-           na.rm = TRUE),
-    n = n()
-  )
-
-ggplot(
-  movement,
-  aes(dt_hours)
-) +
-  geom_histogram(
-    bins = 100
-  ) +
-  theme_bw()
-
-###############################################
-# 4. STANDARDIZE TO 8-HOUR FIXES
-###############################################
-
-hmm_data <- movement %>%
-  filter(
-    year %in% c(2022, 2023, 2024, 2025),
-    dt_hours >= 6,
-    dt_hours <= 10,
-    !is.na(step_length),
-    step_length > 0
-  )
-
-###############################################
-# SAMPLE SIZE CHECK
-###############################################
-
 hmm_data %>%
-  summarise(
-    collars =
-      n_distinct(animal_id),
-    
-    locations = n(),
-    
-    median_dt =
-      median(dt_hours)
-  )
+  summarise(collars =n_distinct(collar),locations = n(),median_dt =median(dt_hours))
 
-###############################################
-# 5. STEP LENGTH EXPLORATION
-###############################################
+fixes_per_collar <- hmm_data %>%
+  count(collar, name = "n_fixes") %>%
+  arrange(n_fixes)
 
-summary(hmm_data$step_length)
+summary(fixes_per_collar$n_fixes)
 
-quantile(
-  hmm_data$step_length,
-  probs = c(
-    0.25,
-    0.50,
-    0.75,
-    0.90
-  ),
-  na.rm = TRUE
-)
-
-ggplot(
-  hmm_data,
-  aes(step_length)
-) +
-  geom_histogram(
-    bins = 100
-  ) +
-  coord_cartesian(
-    xlim = c(0,5000)
-  ) +
+ggplot(fixes_per_collar,
+       aes(n_fixes)) +
+  geom_histogram(binwidth = 25) +
   theme_bw()
 
-ggplot(
-  hmm_data,
-  aes(
-    step_length,
-    fill = overlap
-  )
-) +
-  geom_density(
-    alpha = 0.4
-  ) +
-  scale_x_log10() +
-  theme_bw()
+fixes_per_collar %>%
+  summarise(collars = n(),median = median(n_fixes),min = min(n_fixes),max = max(n_fixes))
 
-###############################################
-# 6. PREPARE HMM DATA
-###############################################
+good_collars <- fixes_per_collar %>%
+  filter(n_fixes >= 50) %>%
+  pull(collar)
 
-mod_data <- data.frame(
-  ID = hmm_data$animal_id,
-  step = hmm_data$step_length,
-  angle = 0
-)
+hmm_sub <- hmm_data %>%
+  filter(collar %in% good_collars)
 
-###############################################
-# STARTING VALUES
-#
-# Adjust if necessary after
-# inspecting quantiles.
-###############################################
+hmm_track <- hmm_sub %>%
+  mutate(ID = as.factor(collar),
+    datetim = as.POSIXct(datetim)) %>%
+  select(ID, datetim, x, y, ovrlps) %>%
+  arrange(ID, datetim)
 
-stepPar0 <- c(
-  200,
-  1200,
-  100,
-  500
-)
+hmm_prep <- prepData(trackData = hmm_track,type = "UTM",coordNames = c("x", "y"))
+
+class(hmm_prep)
+names(hmm_prep)
 
 ###############################################
 # 7. FIT 2-STATE MODEL
+# Adjust starting values if necessary after inspecting quantiles
 ###############################################
 
 mod2 <- fitHMM(
-  data = mod_data,
-  
+  data = hmm_prep,
   nbStates = 2,
-  
-  dist = list(
-    step = "gamma",
-    angle = "wrpcauchy"
-  ),
-  
-  Par0 = list(
-    step = stepPar0,
-    angle = c(0.1, 0.1)
-  )
+  stepPar0 = c(200,1200,100,500),
+  angleDist = "none"
 )
 
 ###############################################
@@ -428,21 +264,30 @@ plot(mod2)
 # DECODE STATES
 ###############################################
 
-hmm_data$state <- viterbi(mod2)
+hmm_track$state <- viterbi(mod2)
 
-table(hmm_data$state)
+table(hmm_track$state)
+prop.table(table(hmm_track$state))
+
+table(hmm_track$state, hmm_track$ovrlps)
+prop.table(table(hmm_track$state, hmm_track$ovrlps),margin = 2)
+
+library(lme4)
+
+glmer(
+  I(state == 2) ~ ovrlps +
+    (1 | ID),
+  data = hmm_track,
+  family = binomial
+)
 
 ###############################################
 # VISUALIZE STATES
 ###############################################
 
 ggplot(
-  hmm_data,
-  aes(
-    factor(state),
-    step_length
-  )
-) +
+  hmm_track,
+  aes(factor(state),step_length)) +
   geom_boxplot() +
   scale_y_log10() +
   theme_bw() +
