@@ -44,7 +44,6 @@ library(collar)
 library(sf)
 library(tidyverse)
 library(adehabitatHR)
-library(lubridate)
 library(bcdata)
 library(janitor)
 
