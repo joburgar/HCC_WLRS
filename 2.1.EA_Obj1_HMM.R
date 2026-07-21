@@ -235,6 +235,8 @@ hmm_track <- hmm_sub %>%
   select(ID, datetim, x, y, ovrlps) %>%
   arrange(ID, datetim)
 
+hmm_track %>% count(ID) # 18 collars with n fixes ranging from 55 to 2098
+
 hmm_prep <- prepData(trackData = hmm_track,type = "UTM",coordNames = c("x", "y"))
 
 class(hmm_prep)
@@ -258,6 +260,15 @@ mod2 <- fitHMM(
 
 print(mod2)
 
+# State 1
+# Mean step ≈ 511 m
+# Persistent (96.3% chance of remaining in state)
+# This looks like:localized use / foraging / residency
+# State 2
+# Mean step ≈ 2215 m
+# Persistent (89.8% chance of remaining in state)
+# This looks like: travelling or broader-scale movement
+
 plot(mod2)
 
 ###############################################
@@ -272,46 +283,27 @@ prop.table(table(hmm_track$state))
 table(hmm_track$state, hmm_track$ovrlps)
 prop.table(table(hmm_track$state, hmm_track$ovrlps),margin = 2)
 
-library(lme4)
-
-glmer(
-  I(state == 2) ~ ovrlps +
-    (1 | ID),
-  data = hmm_track,
-  family = binomial
-)
-
 ###############################################
 # VISUALIZE STATES
 ###############################################
+nrow(hmm_track); nrow(hmm_prep)
+hmm_track$step <- hmm_prep$step
 
-ggplot(
-  hmm_track,
-  aes(factor(state),step_length)) +
+ggplot(hmm_track,
+  aes(factor(state),step)) +
   geom_boxplot() +
   scale_y_log10() +
   theme_bw() +
-  labs(
-    x = "Decoded State",
-    y = "Step Length (m)"
-  )
+  labs(x = "Decoded State",y = "Step Length (m)")
 
 ###############################################
 # STATE OCCUPANCY
 ###############################################
 
-occupancy <- hmm_data %>%
-  count(
-    overlap,
-    state
-  ) %>%
-  
-  group_by(overlap) %>%
-  
-  mutate(
-    proportion =
-      n / sum(n)
-  )
+occupancy <- hmm_track %>%
+  count(ovrlps,state) %>%
+  group_by(ovrlps) %>%
+  mutate(proportion =n / sum(n))
 
 occupancy
 
@@ -319,51 +311,57 @@ occupancy
 # PLOT OCCUPANCY
 ###############################################
 
-ggplot(
-  occupancy,
-  aes(
-    factor(state),
-    proportion,
-    fill = overlap
-  )
-) +
-  geom_col(
-    position = "dodge"
-  ) +
+ggplot(occupancy,aes(factor(state),proportion, fill = ovrlps)) +
+  geom_col(position = "dodge") +
   theme_bw()
+
+summary(mod2)
+print(mod2)
+AIC(mod2)
 
 ###############################################
 # 8. FIT 3-STATE MODEL
 ###############################################
 
-stepPar0_3 <- c(
-  150,
-  800,
-  2500,
-  100,
-  300,
-  800
-)
 
 mod3 <- fitHMM(
-  data = mod_data,
-  
+  data = hmm_prep,
   nbStates = 3,
-  
-  dist = list(
-    step = "gamma",
-    angle = "wrpcauchy"
-  ),
-  
-  Par0 = list(
-    step = stepPar0_3,
-    angle = c(
-      0.1,
-      0.1,
-      0.1
-    )
-  )
-)
+  stepPar0 = c(150,800,2500,100,300,800),
+  angleDist = "none")
+
+print(mod3)
+
+AIC(mod2)
+AIC(mod3)
+
+# mod3_1 <- fitHMM(
+#   data = hmm_prep,
+#   nbStates = 3,
+#   stepPar0 = c(150,800,2500,100,300,800),
+#   angleDist = "none"
+# )
+# 
+# mod3_2 <- fitHMM(
+#   data = hmm_prep,
+#   nbStates = 3,
+#   stepPar0 = c(100,500,2000,100,200,1000),
+#   angleDist = "none"
+# )
+# 
+# mod3_3 <- fitHMM(
+#   data = hmm_prep,
+#   nbStates = 3,
+#   stepPar0 = c(300,1000,3000,200,500,1500),
+#   angleDist = "none"
+# )
+# 
+# AIC(mod3_1)
+# AIC(mod3_2)
+# AIC(mod3_3)
+# 
+# Multiple starting values were examined to assess sensitivity of model fitting. 
+# Three independent runs converged on the same maximum likelihood solution.
 
 ###############################################
 # MODEL COMPARISON
@@ -375,25 +373,80 @@ AIC(mod2, mod3)
 # DECODE 3-STATE MODEL
 ###############################################
 
-hmm_data$state3 <- viterbi(mod3)
+hmm_track$state3 <- viterbi(mod3)
 
-table(hmm_data$state3)
+table(hmm_track$state3)
+
+hmm_track$state3 <- viterbi(mod3)
+
+prop.table(table(hmm_track$state3))
+prop.table(table(hmm_track$state3,hmm_track$ovrlps),margin = 2)
 
 ###############################################
 # VISUALIZE 3 STATES
 ###############################################
 
-ggplot(
-  hmm_data,
-  aes(
-    factor(state3),
-    step_length
-  )
-) +
+ggplot(hmm_track,
+  aes(factor(state3),step)) +
   geom_boxplot() +
   scale_y_log10() +
   theme_bw()
 
+
+# Occupancy table
+occupancy3 <- hmm_track %>%
+  count(ovrlps, state3) %>%
+  group_by(ovrlps) %>%
+  mutate(proportion = n / sum(n))
+
+occupancy3
+
+occupancy3 <- occupancy3 %>%
+  mutate(state_label = factor(state3,levels = c(1, 2, 3),labels = c(
+        "Localized\n(263 m)",
+        "Moderate\n(661 m)",
+        "Travelling\n(2373 m)")))
+
+p_occ <- ggplot(
+  occupancy3,aes(x = state_label,y = proportion,fill = ovrlps)) +
+  geom_col(position = "dodge") +
+  scale_y_continuous(labels = scales::percent,limits = c(0, 0.8)) +
+  scale_fill_manual(values = c("FALSE" = "steelblue","TRUE" = "darkorange"),labels = c("Non-overlap","Overlap")) +
+  labs(x = "Decoded Movement State",y = "Proportion of Locations",fill = "",title = "Occupancy of Three HMM Movement States") +
+  theme_bw(base_size = 12)
+
+
+ggsave("HMM_3state_occupancy.png",plot = p_occ,width = 7,height = 5,dpi = 300)
+
+# Non-overlap animals are dominated by the moderate movement state.
+# Overlap animals are dominated by the travelling state.
+# Travelling-state occupancy increases from 17% to 65%.
+
 ###############################################
 # END
 ###############################################
+
+prop.table(table(hmm_track$state3,hmm_track$ovrlps),margin = 2)
+
+library(lme4)
+m3_high <- glmer(
+  I(state3 == 3) ~ ovrlps + (1 | ID),
+  data = hmm_track,
+  family = binomial)
+
+summary(m3_high)
+
+exp(fixef(m3_high))
+exp(confint(m3_high,parm = "beta_",method = "Wald"))
+
+# ovrlpsTRUE = 2.345
+exp(2.345) # 10.4; the overlap effect is substantial
+
+# Conclusions
+# A 2-state HMM successfully classified movements into low- and high-mobility states.
+# A 3-state HMM was strongly supported over the 2-state model (ΔAIC ≈ 420).
+# The three states corresponded to localized (263 m), moderate (661 m), and travelling (2373 m) movement behaviour.
+# Overlap animals occupied the travelling state much more frequently (65%) than non-overlap animals (17%).
+# A mixed-effects model indicated substantially greater odds of occupying the travelling state for overlap animals (OR ≈ 32, p = 0.005).
+# These results suggest HMM-derived state metrics are likely suitable for subsequent disturbance-response analyses
+
