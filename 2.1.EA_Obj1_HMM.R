@@ -54,6 +54,16 @@ collar <- collar %>%
 collar <- collar %>% 
   mutate(winter_year =if_else(month(datetim) >= 11,year(datetim) + 1,year(datetim)))
 
+caribou <- collar %>%
+  arrange(collar, datetim) %>%
+  group_by(collar) %>%
+  mutate(dt_hours =as.numeric(difftime(datetim,lag(datetim),units = "hours")),
+         dx = x - lag(x),dy = y - lag(y),step_length =sqrt(dx^2 + dy^2),bearing =atan2(dy, dx)) %>%
+  mutate(turning_angle =bearing - lag(bearing)) %>%
+  ungroup()
+
+saveRDS(caribou, "caribou.rds") # save
+
 ### 1. Create movement metrics for Hart Ranges collared caribou
 
 movement <- collar %>%
@@ -323,7 +333,6 @@ AIC(mod2)
 # 8. FIT 3-STATE MODEL
 ###############################################
 
-
 mod3 <- fitHMM(
   data = hmm_prep,
   nbStates = 3,
@@ -450,3 +459,489 @@ exp(2.345) # 10.4; the overlap effect is substantial
 # A mixed-effects model indicated substantially greater odds of occupying the travelling state for overlap animals (OR ≈ 32, p = 0.005).
 # These results suggest HMM-derived state metrics are likely suitable for subsequent disturbance-response analyses
 
+
+##################################################################################
+##################################################################################
+### Continue validation now that HMM seems useful with Hart Ranges herd
+##################################################################################
+##################################################################################
+# STEP 1: Continued HMM validation
+#
+# Goal:
+# Determine whether the 3-state winter movement structure is robust across:
+#   1) Herds
+#   2) Leave-one-herd-out analyses
+#   3) Winter years
+#   4) Individuals
+#
+##################################################################################
+################################################################################
+
+################################################################################
+# USER INPUTS
+################################################################################
+
+focal_herds <- c(
+  "Hart Ranges",
+  "Columbia North",
+  "Central Selkirks",
+  "Wells Gray North",
+  "North Cariboo",
+  "Itcha-Ilgachuz"
+)
+
+################################################################################
+# PREP DATA
+################################################################################
+
+caribou <- readRDS("caribou.rds") # load
+names(caribou)
+# [1] "collar"        "datetim"       "dop"           "idmrtlt"       "activty"       "temprtr"      
+# [7] "manvltg"       "bckpvlt"       "x"             "y"             "med_x"         "med_y"        
+# [13] "dst_f"         "dstnc_t"       "herd_nm"       "ecotype"       "ovrlps"        "year"         
+# [19] "winter_year"   "dt_hours"      "dx"            "dy"            "step_length"   "bearing"      
+# [25] "turning_angle"
+
+caribou_hmm <- caribou %>%
+  filter(herd_nm %in% focal_herds) %>%
+  mutate(ID = as.factor(collar),
+         datetim = as.POSIXct(datetim)) %>%
+  mutate(month  = month(datetim),year   = year(datetim),
+         # define biological winter
+    winter = case_when(month >= 11 ~ year + 1,TRUE ~ year))%>%
+  filter(dt_hours >= 6, dt_hours <= 12) %>%
+  filter(month(datetim) %in% c(11,12,1,2,3,4)) %>%  # clarify winter months
+  filter(winter %in% c(2021,2022,2023,2024,2025,2026)) # clarify winters for analysis
+
+summary(caribou_hmm$dt_hours)
+summary(caribou_hmm$winter)
+caribou_hmm %>% count(month)
+
+caribou_hmm %>% group_by(herd_nm) %>%
+  summarise(collars = n_distinct(collar),steps = n()) 
+
+caribou_hmm %>% group_by(herd_nm, winter) %>%
+  summarise(collars =n_distinct(collar),locations = n(),median_dt =median(dt_hours))%>% print(n=40)
+
+fixes_per_collar <- caribou_hmm %>% group_by(herd_nm) %>%
+  count(collar, name = "n_fixes") %>%
+  arrange(n_fixes)
+
+summary(fixes_per_collar$n_fixes)
+
+ggplot(fixes_per_collar,
+       aes(n_fixes)) +
+  geom_histogram(binwidth = 25) +
+  theme_bw()
+
+fixes_per_collar %>%
+  summarise(collars = n(),median = median(n_fixes),min = min(n_fixes),max = max(n_fixes))
+
+good_collars <- fixes_per_collar %>%
+  filter(n_fixes >= 50) %>%
+  pull(collar)
+
+caribou_track <- caribou_hmm %>%
+  filter(collar %in% good_collars) %>%
+  mutate(ID = as.factor(collar),
+         datetim = as.POSIXct(datetim)) %>%
+  select(herd_nm, ID, datetim, x, y, ovrlps) %>%
+  arrange(ID, datetim)
+
+################################################################################
+# STEP 1: VALIDATE 3-STATE WINTER HMM
+#
+# Goal:
+# Determine whether the 3-state movement-state structure is robust across:
+#
+# 1. Herd-specific models
+# 2. Leave-one-herd-out (LOHO) models
+# 3. Winter-year models
+# 4. Individual-level models
+#
+################################################################################
+# EXTRACT MODEL SUMMARY
+################################################################################
+
+extract_summary <- function(mod,
+                            group_name,
+                            group_type){
+  if(is.null(mod)){
+    return(NULL)
+  }
+  state_means <- mod$mle$stepPar[1,]
+  state_order <- order(state_means)
+  state_means <- state_means[state_order]
+  tibble(
+    group_type = group_type,
+    group      = group_name,
+    state      = 1:3,
+    mean_step  = state_means,
+    AIC        = AIC(mod)
+  )
+}
+
+################################################################################
+# EXTRACT STATE OCCUPANCY
+################################################################################
+
+extract_occupancy <- function(mod,
+                              group_name,
+                              group_type){
+  if(is.null(mod)){
+    return(NULL)
+  }
+  v <- viterbi(mod)
+  occ <- prop.table(table(v))
+  tibble(
+    group_type = group_type,
+    group      = group_name,
+    state      = names(occ),
+    occupancy  = as.numeric(occ)
+  )
+}
+
+################################################################################
+# 1. HERD-SPECIFIC MODELS
+################################################################################
+
+herd_models <- list()
+
+for(h in focal_herds){
+  cat("Running:", h, "\n")
+  # h = focal_herds[1]
+  
+  hmm_track <- caribou_track %>%
+    filter(herd_nm == h) %>%
+    select(ID, datetim, x, y, ovrlps)
+  
+  dat_h <- prepData(trackData = hmm_track,type = "UTM",coordNames = c("x", "y"))
+  dat_h <- dat_h %>% filter(step > 0)
+  
+  herd_models[[h]] <- fitHMM(
+    data = dat_h,
+    nbStates = 3,
+    # stepPar0 = c(300,1000,3000,200,500,1500), # stepPar3
+    # stepPar0 = c(100,500,2000,100,200,1000), # stepPar2
+    stepPar0 = c(150,800,2500,100,300,800), # stepPar1
+    angleDist = "none")
+}
+
+herd_results <- bind_rows(
+  
+  lapply(
+    names(herd_models),
+    function(h){
+      
+      extract_summary(
+        herd_models[[h]],
+        h,
+        "herd")}))
+
+
+herd_models_stepPar3 <- herd_models
+herd_results_stepPar3 <- herd_results
+
+herd_models_stepPar2 <- herd_models
+herd_results_stepPar2 <- herd_results
+
+herd_models_stepPar1 <- herd_models
+herd_results_stepPar1 <- herd_results
+
+### exporting / saving so can start from here without re-running models ###
+# saveRDS(herd_models_stepPar1, "Outputs/herd_models_stepPar1.rds")
+# saveRDS(herd_models_stepPar2, "Outputs/herd_models_stepPar2.rds")
+# saveRDS(herd_models_stepPar3, "Outputs/herd_models_stepPar3.rds")
+# 
+# saveRDS(herd_results_stepPar1, "Outputs/herd_results_stepPar1.rds")
+# saveRDS(herd_results_stepPar2, "Outputs/herd_results_stepPar2.rds")
+# saveRDS(herd_results_stepPar3, "Outputs/herd_results_stepPar3.rds")
+
+herd_models_stepPar1 <- readRDS("Outputs/herd_models_stepPar1.rds")
+herd_models_stepPar2 <- readRDS("Outputs/herd_models_stepPar2.rds")
+herd_models_stepPar3 <- readRDS("Outputs/herd_models_stepPar3.rds")
+
+herd_results_stepPar1 <- readRDS("Outputs/herd_results_stepPar1.rds")
+herd_results_stepPar2 <- readRDS("Outputs/herd_results_stepPar2.rds")
+herd_results_stepPar3 <- readRDS("Outputs/herd_results_stepPar3.rds")
+
+compare_starts <- bind_rows(
+  herd_results_stepPar1 %>% mutate(start = "par1"),
+  herd_results_stepPar2 %>% mutate(start = "par2"),
+  herd_results_stepPar3 %>% mutate(start = "par3")
+)
+
+compare_starts_wide <- compare_starts %>%
+  select(group, start, state, mean_step, AIC) %>%
+  tidyr::pivot_wider(
+    names_from = state,
+    values_from = mean_step,
+    names_prefix = "State_"
+  ) %>%
+  arrange(group, start)
+
+compare_starts_wide # all look nearly identicial, except Columbia North
+
+# going with starting levels for stepPar1
+# stepPar0 = c(150,800,2500,100,300,800), # stepPar1
+
+
+compare_starts_wide %>%
+  group_by(group) %>%
+  summarise(
+    mean_state1 = mean(State_1),
+    mean_state2 = mean(State_2),
+    mean_state3 = mean(State_3),
+    cv_state1 = sd(State_1)/mean(State_1),
+    cv_state2 = sd(State_2)/mean(State_2),
+    cv_state3 = sd(State_3)/mean(State_3)
+  )
+
+compare_starts_wide %>%
+  filter(group == "Columbia North")
+
+caribou %>%
+  filter(herd_nm %in% focal_herds) %>%
+  group_by(herd_nm) %>%
+  summarise(
+    mean_step = mean(step_length, na.rm = TRUE),
+    median_step = median(step_length, na.rm = TRUE),
+    p95 = quantile(step_length, 0.95, na.rm = TRUE)
+  )
+
+# Passing the starting-value test: Yes.
+# Evidence of instability: Only Columbia North's par3 fit, and the huge AIC difference makes it easy to reject.
+# Biggest issue revealed so far: Not starting values. It's that Central Selkirks and especially Itcha-Ilgachuz appear to have much larger movement scales than the other herds.
+
+################################################################################
+# 2. LEAVE-ONE-HERD-OUT MODELS
+################################################################################
+
+loho_models <- list()
+
+for(h in focal_herds){
+  
+  cat("Leaving out:", h, "\n")
+  
+  hmm_track <- caribou_track %>%
+    filter(herd_nm != h) %>%
+    select(herd_nm, ID, datetim, x, y, ovrlps)
+  
+  dat_h <- prepData(trackData = hmm_track,type = "UTM",coordNames = c("x", "y"))
+  dat_h <- dat_h %>% filter(step > 0)
+  
+  herd_models[[h]] <- fitHMM(
+    data = dat_h,
+    nbStates = 3,
+    stepPar0 = c(300,1000,3000,200,500,1500), # stepPar3
+    # stepPar0 = c(100,500,2000,100,200,1000), # stepPar2
+    # stepPar0 = c(150,800,2500,100,300,800), # stepPar1
+    angleDist = "none")
+  
+}
+
+loho_results <- bind_rows(
+  
+  lapply(
+    names(loho_models),
+    function(h){
+      
+      extract_summary(
+        loho_models[[h]],
+        paste0("Exclude_", h),
+        "LOHO"
+      )
+      
+    }
+  )
+  
+)
+
+################################################################################
+# 3. WINTER-YEAR MODELS
+################################################################################
+
+cat("\n")
+cat("===========================================\n")
+cat("WINTER-YEAR HMMS\n")
+cat("===========================================\n")
+
+winter_models <- list()
+
+winters <- sort(unique(hmm_data$winter_year))
+
+for(w in winters){
+  
+  cat("Winter:", w, "\n")
+  
+  dat_w <- hmm_data %>%
+    filter(winter_year == w)
+  
+  winter_models[[as.character(w)]] <- fit_3state_hmm(
+    dat_w,
+    stepPar0 = stepPar0
+  )
+  
+}
+
+winter_results <- bind_rows(
+  
+  lapply(
+    names(winter_models),
+    function(w){
+      
+      extract_summary(
+        winter_models[[w]],
+        w,
+        "winter"
+      )
+      
+    }
+  )
+  
+)
+
+################################################################################
+# 4. INDIVIDUAL-LEVEL HMMS
+################################################################################
+
+cat("\n")
+cat("===========================================\n")
+cat("INDIVIDUAL HMMS\n")
+cat("===========================================\n")
+
+good_ids <- hmm_data %>%
+  count(ID) %>%
+  filter(n >= min_fixes_individual) %>%
+  pull(ID)
+
+individual_models <- list()
+
+for(id in good_ids){
+  
+  cat("Individual:", as.character(id), "\n")
+  
+  dat_i <- hmm_data %>%
+    filter(ID == id)
+  
+  individual_models[[as.character(id)]] <-
+    fit_3state_hmm(
+      dat_i,
+      stepPar0 = stepPar0
+    )
+  
+}
+
+individual_results <- bind_rows(
+  
+  lapply(
+    names(individual_models),
+    function(id){
+      
+      extract_summary(
+        individual_models[[id]],
+        id,
+        "individual"
+      )
+      
+    }
+  )
+  
+)
+
+################################################################################
+# COMBINE RESULTS
+################################################################################
+
+robustness_summary <- bind_rows(
+  herd_results,
+  loho_results,
+  winter_results,
+  individual_results
+)
+
+################################################################################
+# STATE STABILITY
+################################################################################
+
+state_stability <- robustness_summary %>%
+  group_by(group_type, state) %>%
+  summarise(
+    mean_step = mean(mean_step, na.rm = TRUE),
+    sd_step   = sd(mean_step, na.rm = TRUE),
+    cv_step   = sd_step / mean_step,
+    .groups = "drop"
+  )
+
+################################################################################
+# OCCUPANCY SUMMARIES
+################################################################################
+
+herd_occupancy <- bind_rows(
+  
+  lapply(
+    names(herd_models),
+    function(h){
+      
+      extract_occupancy(
+        herd_models[[h]],
+        h,
+        "herd"
+      )
+      
+    }
+  )
+  
+)
+
+################################################################################
+# REVIEW OUTPUTS
+################################################################################
+
+print(state_stability)
+
+head(robustness_summary)
+
+head(herd_occupancy)
+
+################################################################################
+# SAVE OUTPUTS
+################################################################################
+
+dir.create("outputs", showWarnings = FALSE)
+
+write.csv(
+  robustness_summary,
+  "outputs/HMM_robustness_summary.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  state_stability,
+  "outputs/HMM_state_stability.csv",
+  row.names = FALSE
+)
+
+write.csv(
+  herd_occupancy,
+  "outputs/HMM_state_occupancy.csv",
+  row.names = FALSE
+)
+
+################################################################################
+# OPTIONAL VISUAL CHECK
+################################################################################
+
+library(ggplot2)
+
+ggplot(
+  robustness_summary,
+  aes(state,
+      mean_step,
+      colour = group_type)
+) +
+  geom_point(size = 2) +
+  geom_line(aes(group = group)) +
+  theme_bw()
+
+################################################################################
