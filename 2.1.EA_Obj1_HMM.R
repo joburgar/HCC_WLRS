@@ -685,7 +685,6 @@ compare_starts_wide # all look nearly identicial, except Columbia North
 # going with starting levels for stepPar1
 # stepPar0 = c(150,800,2500,100,300,800), # stepPar1
 
-
 compare_starts_wide %>%
   group_by(group) %>%
   summarise(
@@ -709,6 +708,8 @@ caribou %>%
     p95 = quantile(step_length, 0.95, na.rm = TRUE)
   )
 
+write.csv(compare_starts_wide,"outputs/compare_starts_wide.csv",row.names = FALSE)
+
 # Passing the starting-value test: Yes.
 # Evidence of instability: Only Columbia North's par3 fit, and the huge AIC difference makes it easy to reject.
 # Biggest issue revealed so far: Not starting values. It's that Central Selkirks and especially Itcha-Ilgachuz appear to have much larger movement scales than the other herds.
@@ -730,18 +731,15 @@ for(h in focal_herds){
   dat_h <- prepData(trackData = hmm_track,type = "UTM",coordNames = c("x", "y"))
   dat_h <- dat_h %>% filter(step > 0)
   
-  herd_models[[h]] <- fitHMM(
+  loho_models[[h]] <- fitHMM(
     data = dat_h,
     nbStates = 3,
-    stepPar0 = c(300,1000,3000,200,500,1500), # stepPar3
-    # stepPar0 = c(100,500,2000,100,200,1000), # stepPar2
-    # stepPar0 = c(150,800,2500,100,300,800), # stepPar1
+    stepPar0 = c(150,800,2500,100,300,800), # stepPar1 (from initial tests)
     angleDist = "none")
   
 }
 
 loho_results <- bind_rows(
-  
   lapply(
     names(loho_models),
     function(h){
@@ -749,22 +747,47 @@ loho_results <- bind_rows(
       extract_summary(
         loho_models[[h]],
         paste0("Exclude_", h),
-        "LOHO"
-      )
-      
-    }
-  )
-  
+        "LOHO")})
 )
+
+
+# saveRDS(loho_results, "Outputs/loho_results.rds")
+loho_results <- readRDS("Outputs/loho_results.rds")
+
+
+loho_wide <- loho_results %>%
+  select(group, state, mean_step, AIC) %>%
+  pivot_wider(
+    names_from = state,
+    values_from = mean_step,
+    names_prefix = "State_"
+  ) %>%
+  rename(AIC = AIC)
+
+loho_wide
+
+loho_wide %>%
+  summarise(State1_min = min(State_1),State1_max = max(State_1),
+    State2_min = min(State_2),State2_max = max(State_2),
+    State3_min = min(State_3),
+    State3_max = max(State_3))
+
+loho_plot <- ggplot(loho_results,aes(group, mean_step)) +
+  geom_point(size = 3) +
+  facet_wrap(~state, scales = "free_y") +
+  coord_flip() +
+  theme_bw()
+
+ggsave("loho_plot.png",plot = loho_plot,width = 10,height = 5,dpi = 300)
+
+# Leave-one-herd-out analyses recovered the same three-state structure regardless of which herd was excluded.
+# Estimated step lengths for the localized and intermediate states were relatively stable among analyses (~15-179 m and ~497-701 m, respectively)
+# The travelling state showed greater variability (~1968-3281 m), largely due to the influence of the Itcha-Ilgachuz herd, which exhibited substantially larger movement scales than other focal herds.
+# Exclusion of any single herd did not alter recovery of the three-state solution, suggesting that HMM state structure is broadly robust across study areas.
 
 ################################################################################
 # 3. WINTER-YEAR MODELS
 ################################################################################
-
-cat("\n")
-cat("===========================================\n")
-cat("WINTER-YEAR HMMS\n")
-cat("===========================================\n")
 
 winter_models <- list()
 
@@ -804,11 +827,6 @@ winter_results <- bind_rows(
 ################################################################################
 # 4. INDIVIDUAL-LEVEL HMMS
 ################################################################################
-
-cat("\n")
-cat("===========================================\n")
-cat("INDIVIDUAL HMMS\n")
-cat("===========================================\n")
 
 good_ids <- hmm_data %>%
   count(ID) %>%
