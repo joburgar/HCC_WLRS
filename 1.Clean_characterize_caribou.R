@@ -718,80 +718,45 @@ plot(
 )
 
 ############################################################
-# DONE
+# Create decision support tool for heli-ski data
 ############################################################
+
+# read in data
+collar_summary <- read.csv("Outputs/collar_summary.csv")
+glimpse(collar_summary)
 
 # create ranking of herds to use
 
-library(tidyverse)
-
 herd_rank <- collar_summary %>%
-  
-  # remove unknown herds
   filter(!is.na(herd_name)) %>%
-  
   group_by(herd_name) %>%
-  
   summarise(
     unique_collars = n_distinct(COLLAR_ID),
     collar_years = n(),
     total_fixes = sum(fixes, na.rm = TRUE),
-    
-    overlap_collars =
-      n_distinct(COLLAR_ID[overlaps_tenure == TRUE]),
-    
-    nonoverlap_collars =
-      n_distinct(COLLAR_ID[overlaps_tenure == FALSE]),
-    
-    overlap_collar_years =
-      sum(overlaps_tenure == TRUE, na.rm = TRUE),
-    
-    nonoverlap_collar_years =
-      sum(overlaps_tenure == FALSE, na.rm = TRUE),
-    
-    median_fixes_per_collar_year =
-      median(fixes, na.rm = TRUE),
-    
-    mean_fixes_per_collar_year =
-      mean(fixes, na.rm = TRUE),
-    
+    overlap_collars =n_distinct(COLLAR_ID[overlaps_tenure == TRUE]),
+    nonoverlap_collars =n_distinct(COLLAR_ID[overlaps_tenure == FALSE]),
+    overlap_collar_years =sum(overlaps_tenure == TRUE, na.rm = TRUE),
+    nonoverlap_collar_years =sum(overlaps_tenure == FALSE, na.rm = TRUE),
+    median_fixes_per_collar_year =median(fixes, na.rm = TRUE),
+    mean_fixes_per_collar_year =mean(fixes, na.rm = TRUE),
     first_winter = min(winter, na.rm = TRUE),
     last_winter  = max(winter, na.rm = TRUE),
-    
-    winters_monitored =
-      n_distinct(winter),
-    
-    .groups = "drop"
-  ) %>%
-  
-  arrange(desc(overlap_collars),
-          desc(total_fixes))
+    winters_monitored = n_distinct(winter),
+    .groups = "drop") %>%
+  arrange(desc(overlap_collars),desc(total_fixes))
 
 herd_rank
 
 # decision support version
 herd_rank %>%
-  select(
-    herd_name,
-    overlap_collars,
-    nonoverlap_collars,
-    collar_years,
-    winters_monitored,
-    total_fixes,
-    median_fixes_per_collar_year
-  ) %>%
+  select(herd_name,overlap_collars,nonoverlap_collars,collar_years,winters_monitored,total_fixes,median_fixes_per_collar_year) %>%
   arrange(desc(overlap_collars),
           desc(total_fixes))
 
-write.csv(
-  herd_rank,
-  "herd_monitoring_summary.csv",
-  row.names = FALSE
-)
-
 herd_rank <- herd_rank %>%
-  mutate(
-    overlap_ratio =
-      overlap_collars /
-      (overlap_collars + nonoverlap_collars)
-  )
+  mutate(overlap_ratio =overlap_collars /(overlap_collars + nonoverlap_collars))
+
+glimpse(herd_rank)
+write.csv(herd_rank,"Outputs/herd_monitoring_summary.csv",row.names = FALSE)
+
