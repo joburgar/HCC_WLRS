@@ -64,6 +64,7 @@ caribou <- collar %>%
 
 saveRDS(caribou, "caribou.rds") # save
 
+
 ### 1. Create movement metrics for Hart Ranges collared caribou
 
 movement <- collar %>%
@@ -202,7 +203,7 @@ saveRDS(movement, "movement.rds") # save
 ###############################################
 # 1. PREPARE DATA
 ###############################################
-
+# caribou <- readRDS("caribou.rds")
 movement <- readRDS("movement.rds") # load
 
 hmm_data <- movement %>%
@@ -853,6 +854,53 @@ caribou_track %>%
 # Herd-specific and leave-one-herd-out analyses provide strong evidence that a 3-state movement structure is consistently recovered across study herds and is largely insensitive to starting values. 
 # Winter-specific models also recovered a 3-state solution in all years, although state boundaries, particularly between the low- and moderate-mobility states, varied among winters.
 
+###############################################################################
+# posterior testing
+
+mod <- winter_models[["2022"]]
+
+winter_stepPar <- bind_rows(
+  lapply(
+    names(winter_models),
+    function(w){
+      
+      sp <- winter_models[[w]]$mle$stepPar
+      
+      # order states by mean step length
+      ord <- order(sp[1, ])
+      
+      sp <- sp[, ord]
+      
+      data.frame(
+        winter = w,
+        Low_mean  = round(sp[1,1], 1),
+        Low_sd    = round(sp[2,1], 1),
+        Mid_mean  = round(sp[1,2], 1),
+        Mid_sd    = round(sp[2,2], 1),
+        High_mean = round(sp[1,3], 1),
+        High_sd   = round(sp[2,3], 1)
+      )
+    }
+  )
+)
+
+winter_stepPar <- winter_stepPar %>%
+  arrange(winter)
+
+print(winter_stepPar)
+
+write.csv(
+  winter_stepPar,
+  "Outputs/HMM_winter_stepPar_reordered.csv",
+  row.names = FALSE
+)
+
+winter_stepPar %>%
+  summarise(
+    low_range  = paste(min(Low_mean), "-", max(Low_mean)),
+    mid_range  = paste(min(Mid_mean), "-", max(Mid_mean)),
+    high_range = paste(min(High_mean), "-", max(High_mean))
+  )
 ################################################################################
 # 4. INDIVIDUAL-LEVEL HMMS
 ################################################################################
