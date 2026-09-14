@@ -144,7 +144,7 @@ names(gps)
 # SAVE EXPORTED DATA
 ##################################################
 
-saveRDS(gps, "gps_download.rds") # save
+saveRDS(gps, "gps_download.rds") # saved 14 September 2026
 gps <- readRDS("gps_download.rds") # load
 
 message(
@@ -155,26 +155,7 @@ message(
   " collars."
 )
 
-
-############################################################
-# LOAD HERDS
-############################################################
-
-herds <- bcdc_get_data(
-  "2b217585-f48d-4d9f-b7ba-746909ac35ca"
-) |>
-  clean_names() |>
-  filter(ecotype == "Mountain")
-
-############################################################
-# LOAD HELI-SKI TENURES
-############################################################
-
-tenures <- bcdc_get_data(
-  "3544ad91-0cf2-4926-a08a-bfe42d9a031d"
-) |>
-  clean_names() |>
-  filter(tenure_subpurpose == "HELI SKI")
+"Downloaded 3059662 fixes from 926 collars."
 
 ############################################################
 # CLEAN GPS DATA
@@ -199,7 +180,7 @@ pts <- st_as_sf(
 )
 
 pts <- st_transform(pts, 3005)
-# dim(pts) # [1] 105838     33
+# dim(pts) # [1] 3028311       9
 
 
 ############################################################
@@ -284,6 +265,17 @@ write_csv(
 )
 
 ############################################################
+# LOAD HERDS
+############################################################
+
+herds <- bcdc_get_data(
+  "2b217585-f48d-4d9f-b7ba-746909ac35ca"
+) |>
+  clean_names() |>
+  filter(ecotype == "Mountain")
+
+
+############################################################
 # ASSIGN HERD ATTRIBUTES
 ############################################################
 
@@ -300,6 +292,119 @@ pts_clean <- st_join(
   left = TRUE
 )
 
+###########################################################
+# Herds for HCC-WLRS analysis: herds that overlap that provided data
+herds_small %>% count(herd_name) %>% st_drop_geometry() %>% print(n=33)
+HCC_data_share <- c("Barkerville", "Wells Gray North","Wells Gray South",
+                    "Narraway", "Quintette","Hart Ranges","Groundhog")
+
+names(pts_clean)
+
+############################################################
+# WINTER SUMMARY
+############################################################
+
+winter_clean <- pts_clean %>%
+  mutate(
+    month = month(datetime),
+    winter = case_when(
+      month %in% c(11, 12) ~ year(datetime) + 1,
+      month %in% c(1, 2, 3, 4) ~ year(datetime),
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  filter(!is.na(winter))
+
+st_write(
+  winter_clean %>% filter(herd_name %in% HCC_data_share),
+  file.path(output_dir,
+            "HCC_data_share_14Sept2026.shp"),
+  driver = "ESRI Shapefile",
+  delete_layer = TRUE
+)
+
+############################################################
+# LOAD HELI-SKI TENURES
+############################################################
+
+tenures <- bcdc_get_data(
+  "3544ad91-0cf2-4926-a08a-bfe42d9a031d"
+) |>
+  clean_names() |>
+  filter(tenure_subpurpose == "HELI SKI")
+############################################################
+winter_pts <- pts_clean %>%
+  st_drop_geometry() %>%
+  mutate(
+    month = month(datetime),
+    winter = case_when(
+      month %in% c(11, 12) ~ year(datetime) + 1,
+      month %in% c(1, 2, 3, 4) ~ year(datetime),
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  filter(!is.na(winter))
+
+
+collar_summary <- winter_pts %>%
+  group_by(
+    COLLAR_ID,
+    herd_name,
+    overlaps_tenure,
+    winter
+  ) %>%
+  summarise(
+    fixes = n(),
+    start_date = min(datetime),
+    end_date = max(datetime),
+    mean_dop = mean(dop, na.rm = TRUE),
+    max_dop = max(dop, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+write_csv(
+  collar_summary,
+  file.path(
+    output_dir,
+    "collar_summary.csv"
+  )
+)
+
+############################################################
+# ACTIVE COLLARS BY WINTER
+############################################################
+
+active_collars <- collar_summary %>%
+  filter(fixes > 30) %>%
+  group_by(winter) %>%
+  summarise(
+    n_collars = n_distinct(COLLAR_ID),
+    .groups = "drop"
+  )
+
+p1 <- ggplot(
+  active_collars,
+  aes(
+    x = factor(winter),
+    y = n_collars)) +
+  geom_col() +
+  geom_text(
+    aes(label = n_collars),
+    vjust = -0.3) +
+  labs(
+    x = "Winter",
+    y = "Number of Active Collars",
+    title = "Active Collars by Winter (>30 fixes)") +
+  theme_minimal()
+
+ggsave(
+  file.path(
+    output_dir,
+    "active_collars_by_winter.png"),
+  p1,
+  width = 8,
+  height = 5,
+  dpi = 300)
 
 ############################################################
 # MCP GENERATION
