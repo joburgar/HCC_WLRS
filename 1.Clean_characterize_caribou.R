@@ -296,13 +296,15 @@ pts_clean <- st_join(
 # Herds for HCC-WLRS analysis: herds that overlap that provided data
 herds_small %>% count(herd_name) %>% st_drop_geometry() %>% print(n=33)
 HCC_data_share <- c("Barkerville", "Wells Gray North","Wells Gray South",
-                    "Narraway", "Quintette","Hart Ranges","Groundhog")
+                    "Narraway", "Quintette","Hart Ranges","Groundhog","North Cariboo")
 
 names(pts_clean)
 
 ############################################################
 # WINTER SUMMARY
 ############################################################
+
+pts_clean %>% summarise(min(datetime))
 
 winter_clean <- pts_clean %>%
   mutate(
@@ -314,6 +316,8 @@ winter_clean <- pts_clean %>%
     )
   ) %>%
   filter(!is.na(winter))
+
+winter_clean %>% group_by(winter) %>% count(month) %>% st_drop_geometry()
 
 st_write(
   winter_clean %>% filter(herd_name %in% HCC_data_share),
@@ -333,20 +337,8 @@ tenures <- bcdc_get_data(
   clean_names() |>
   filter(tenure_subpurpose == "HELI SKI")
 ############################################################
-winter_pts <- pts_clean %>%
-  st_drop_geometry() %>%
-  mutate(
-    month = month(datetime),
-    winter = case_when(
-      month %in% c(11, 12) ~ year(datetime) + 1,
-      month %in% c(1, 2, 3, 4) ~ year(datetime),
-      TRUE ~ NA_real_
-    )
-  ) %>%
-  filter(!is.na(winter))
 
-
-collar_summary <- winter_pts %>%
+collar_summary <- winter_clean %>% filter(herd_name %in% HCC_data_share) %>% 
   group_by(
     COLLAR_ID,
     herd_name,
