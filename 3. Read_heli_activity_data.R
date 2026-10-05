@@ -108,3 +108,53 @@ st_write(
 #   flightlines_out,
 #   zcol = "project"
 # )
+
+################################################################################
+## Clipped heli data to caribou herds
+library(sf)
+library(tidyverse)
+library(bcdata)
+library(janitor)
+
+# Read flightlines
+flightlines <- st_read(
+  "//sfp.idir.bcgov/home/perpetual/HCC_flight_data/flightlines_5Oct2026.gpkg",
+  quiet = TRUE
+)
+
+# Read BC caribou herd polygons
+herds <- bcdc_get_data(
+  "2b217585-f48d-4d9f-b7ba-746909ac35ca"
+) |>
+  clean_names() |>
+  filter(ecotype == "Mountain")
+
+herds_small <- herds %>%
+  select(
+    herd_name,
+    ecotype
+  )
+
+# Match projections
+flightlines <- st_transform(flightlines, st_crs(herds_small))
+
+# Buffer herds by 20 km to capture nearby flight tracks
+caribou_buff <- st_buffer(herds_small, 20000)
+
+# Keep only points intersecting buffered herd ranges
+flightlines_clip <- st_filter(
+  flightlines,
+  caribou_buff,
+  .predicate = st_intersects
+)
+
+# Save clipped dataset
+st_write(
+  flightlines_clip,
+  "//sfp.idir.bcgov/home/perpetual/HCC_flight_data/combined_flightlines_caribou.gpkg",
+  delete_dsn = TRUE
+)
+
+# Quick summary
+cat("Original points:", nrow(flightlines), "\n")
+cat("Clipped points:", nrow(flightlines_clip), "\n")
