@@ -222,10 +222,6 @@ build_anchors <- function(fixes){
   # SEASON LABEL
   ##########################################################
   
-  ##########################################################
-  # SEASON LABEL
-  ##########################################################
-  
   anc[, season :=year(cutoff_utc) +ifelse(month(cutoff_utc) == 12,1,0)]
   table(anc$season)
   
@@ -277,19 +273,11 @@ build_anchors <- function(fixes){
   ##########################################################
   
   anc <- anc %>%
-    arrange(
-      collar,
-      date_local
-    )
+    arrange(collar,date_local)
+  
+  return(
+    list(anchors = anc,n_all = n_all))
 }
-
-##########################################################
-# ADD ANCHOR COORDINATES
-##########################################################
-
-anchor_xy <- fx_dt[, .(collar,anchor_time_utc = t,x,y)]
-anc <- merge(anc,anchor_xy,by = c("collar", "anchor_time_utc"),all.x = TRUE)
-
 ############################################################
 
 report_anchors <- function(anc, n_all){
@@ -401,6 +389,27 @@ result <- build_anchors(fixes)
 anchors <- result$anchors
 
 report_anchors(anchors,result$n_all)
+# ========================================
+#   ANCHOR SUMMARY
+# ========================================
+#   
+#   Collar-days considered: 59607 
+# Anchors retained: 58189 
+# Collars represented: 200 
+# 
+# fix_interval_h     n collars median_age_h p90_age_h
+# <dbl> <int>   <int>     <dbl>     <dbl>
+# 6     4294      16       3.15       3.16
+# 8     13764     57       0.156      7.16
+# 12    39767     124      3.15       3.16
+# 15    347       2        1.16      10.2 
+# 24    17        1        2.15       2.16
+# 
+# Anchors per season
+# 
+# 2020  2021  2022  2023  2024  2025  2026 
+# 729  4338  8586 10668 10935 11736 11197 
+ 
 
 write_outputs(anchors,fixes,OUTPUT_STEM)
 
