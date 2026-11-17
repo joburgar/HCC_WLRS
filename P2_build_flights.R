@@ -150,17 +150,16 @@ heli %>% st_drop_geometry() %>% mutate(hour = hour(time)) %>% count(hour)
 
 heli <- heli %>%
   mutate(t_utc = time,date_local =as.Date(with_tz(t_utc,TIMEZONE)),
-    season =year(date_local) +if_else(month(date_local) == 12,1,0))
+         season =year(date_local) +if_else(month(date_local) == 12,1,0))
+
+head(heli %>%st_drop_geometry() %>%mutate(with_tz("America/Vancouver")) %>%
+    select(time,))
 
 ############################################################
 # FILTER TO HELISKI SEASON
 ############################################################
 
-heli <- heli %>%
-  filter(
-    month(date_local) %in%
-      SEASON_MONTHS
-  )
+heli <- heli %>% filter(month(date_local) %in% SEASON_MONTHS)
 
 ############################################################
 # COORDINATES
@@ -168,14 +167,37 @@ heli <- heli %>%
 
 coords <- st_coordinates(heli)
 
-heli <- heli %>%
-  mutate(
-    x = coords[,1],
-    y = coords[,2]
-  )
+heli <- heli %>% mutate(x = coords[,1],y = coords[,2])
 
 ############################################################
-# CREATE AIRCRAFT-DAY TABLE
+# SPEED QA
+############################################################
+
+heli_dt <- heli_dt %>%
+  mutate(speed_kmh =if_else(dt_h > 0,dist_km / dt_h,NA_real_))
+
+summary(heli_dt$speed_kmh)
+
+quantile(heli_dt$speed_kmh,c(.5,.75,.9,.95,.99),na.rm = TRUE)
+
+sum(heli_dt$speed_kmh > 60,na.rm = TRUE)
+
+
+heli_dt <- heli_dt %>% mutate(airborne = speed_kmh >= 60)
+
+table(heli_dt$airborne,useNA = "ifany")
+prop.table(table(heli_dt$airborne,useNA = "ifany"))
+
+summary(heli_dt$dist_km)
+quantile(heli_dt$dist_km,c(.5,.75,.9,.95,.99,.999),na.rm = TRUE)
+sum(heli_dt$dist_km > 15,na.rm = TRUE)
+
+
+heli_dt <- heli_dt %>% mutate(good_jump =is.na(dist_km) |dist_km <= 15)
+table(heli_dt$good_jump)
+
+############################################################
+# CREATE AIRCRAFT-DAY TABLE ### START HERE
 ############################################################
 
 flying_days <- heli %>%
@@ -183,7 +205,7 @@ flying_days <- heli %>%
   mutate(
     tail =
       if_else(
-        is.na(tail),
+        is.na(tail) | tail == "",
         "unknown",
         tail
       )
@@ -194,7 +216,6 @@ flying_days <- heli %>%
     date_local
   ) %>%
   summarise(
-    
     n_points = n(),
     
     t_first_utc =
